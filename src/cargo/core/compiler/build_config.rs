@@ -48,6 +48,8 @@ pub struct BuildConfig {
     pub future_incompat_report: bool,
     /// Which kinds of build timings to output (empty if none).
     pub timing_outputs: Vec<TimingOutput>,
+    /// Use checksums rather than mtimes to determine if a crate is fresh.
+    pub checksum_freshness: bool,
 }
 
 fn default_parallelism() -> CargoResult<u32> {
@@ -120,6 +122,7 @@ impl BuildConfig {
             export_dir: None,
             future_incompat_report: false,
             timing_outputs: Vec::new(),
+            checksum_freshness: false,
         })
     }
 
