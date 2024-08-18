@@ -34,6 +34,10 @@ pub enum DirtyReason {
         old: String,
         new: String,
     },
+    ChecksumUseChanged {
+        old: bool,
+        new: bool,
+    },
     DepInfoOutputChanged {
         old: PathBuf,
         new: PathBuf,
@@ -182,6 +186,16 @@ impl DirtyReason {
             }
             DirtyReason::PrecalculatedComponentsChanged { .. } => {
                 s.dirty_because(unit, "the precalculated components changed")
+            }
+            DirtyReason::ChecksumUseChanged { old, new: _ } => {
+                if *old {
+                    s.dirty_because(
+                        unit,
+                        "the prior compilation used checksum freshness and this one does not",
+                    )
+                } else {
+                    s.dirty_because(unit, "checksum freshness requested, prior compilation did not use checksum freshness")
+                }
             }
             DirtyReason::DepInfoOutputChanged { .. } => {
                 s.dirty_because(unit, "the dependency info output changed")

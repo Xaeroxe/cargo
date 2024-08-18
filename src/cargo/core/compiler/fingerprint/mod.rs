@@ -734,17 +734,10 @@ enum LocalFingerprint {
     /// The `dep_info` file, when present, also lists a number of other files
     /// for us to look at. If any of those files are newer than this file then
     /// we need to recompile.
-    CheckDepInfo { dep_info: PathBuf },
-
-    /// This is used for crate compilations. The `dep_info` file is a relative
-    /// path anchored at `target_root(...)` to the dep-info file that Cargo
-    /// generates (which is a custom serialization after parsing rustc's own
-    /// `dep-info` output).
     ///
-    /// The `dep_info` file, when present, also lists a number of other files
-    /// for us to look at. If any of those files have a different checksum then
-    /// we need to recompile.
-    CheckDepInfoChecksums { dep_info: PathBuf },
+    /// If the `checksum` bool is true then the dep_info file is expected to
+    /// contain file checksums instead of file mtimes.
+    CheckDepInfo { dep_info: PathBuf, checksum: bool },
 
     /// This represents a nonempty set of `rerun-if-changed` annotations printed
     /// out by a build script. The `output` file is a relative file anchored at
@@ -837,42 +830,56 @@ impl LocalFingerprint {
             // matches, and for each file we see if any of them are newer than
             // the `dep_info` file itself whose mtime represents the start of
             // rustc.
-            LocalFingerprint::CheckDepInfo { dep_info } => {
+            LocalFingerprint::CheckDepInfo { dep_info, checksum } => {
                 let dep_info = target_root.join(dep_info);
-                let info = match dep_info_shared(pkg_root, target_root, &dep_info, cargo_exe, gctx)?
-                {
-                    Either::Left(stale) => {
-                        return Ok(Some(stale));
-                    }
-                    Either::Right(info) => info,
+                let cargo_exe = cargo_exe;
+                let Some(info) = parse_dep_info(pkg_root, target_root, &dep_info)? else {
+                    return Ok(Some(StaleItem::MissingFile(dep_info.clone())));
                 };
-                Ok(find_stale_file(
-                    mtime_cache,
-                    checksum_cache,
-                    &dep_info,
-                    info.files.iter().map(|p| (p, None)),
-                    false,
-                ))
-            }
-
-            LocalFingerprint::CheckDepInfoChecksums { dep_info } => {
-                let dep_info = target_root.join(dep_info);
-                let info = match dep_info_shared(pkg_root, target_root, &dep_info, cargo_exe, gctx)?
-                {
-                    Either::Left(stale) => {
-                        return Ok(Some(stale));
+                for (key, previous) in info.env.iter() {
+                    let current = if key == CARGO_ENV {
+                        Some(
+                            cargo_exe
+                                .to_str()
+                                .ok_or_else(|| {
+                                    format_err!(
+                                        "cargo exe path {} must be valid UTF-8",
+                                        cargo_exe.display()
+                                    )
+                                })?
+                                .to_string(),
+                        )
+                    } else {
+                        gctx.get_env(key).ok()
+                    };
+                    if current == *previous {
+                        continue;
                     }
-                    Either::Right(info) => info,
-                };
-                Ok(find_stale_file(
-                    mtime_cache,
-                    checksum_cache,
-                    &dep_info,
-                    info.files
+                    return Ok(Some(StaleItem::ChangedEnv {
+                        var: key.clone(),
+                        previous: previous.clone(),
+                        current,
+                    }));
+                }
+                macro_rules! find_stale_file {
+                    ($iter:expr) => {
+                        Ok(find_stale_file(
+                            mtime_cache,
+                            checksum_cache,
+                            &dep_info,
+                            $iter,
+                            *checksum,
+                        ))
+                    };
+                }
+                if *checksum {
+                    find_stale_file!(info
+                        .files
                         .iter()
-                        .map(|file| (file.clone(), info.checksum.get(file).cloned())),
-                    true,
-                ))
+                        .map(|file| (file.clone(), info.checksum.get(file).cloned())))
+                } else {
+                    find_stale_file!(info.files.into_iter().map(|p| (p, None)))
+                }
             }
 
             // We need to verify that no paths listed in `paths` are newer than
@@ -897,46 +904,10 @@ impl LocalFingerprint {
         match self {
             LocalFingerprint::Precalculated(..) => "precalculated",
             LocalFingerprint::CheckDepInfo { .. } => "dep-info",
-            LocalFingerprint::CheckDepInfoChecksums { .. } => "dep-info-checksums",
             LocalFingerprint::RerunIfChanged { .. } => "rerun-if-changed",
             LocalFingerprint::RerunIfEnvChanged { .. } => "rerun-if-env-changed",
         }
     }
-}
-
-fn dep_info_shared(
-    pkg_root: &Path,
-    target_root: &Path,
-    dep_info: &PathBuf,
-    cargo_exe: &Path,
-    gctx: &GlobalContext,
-) -> Result<Either<StaleItem, RustcDepInfo>, anyhow::Error> {
-    let Some(info) = parse_dep_info(pkg_root, target_root, dep_info)? else {
-        return Ok(Either::Left(StaleItem::MissingFile(dep_info.clone())));
-    };
-    for (key, previous) in info.env.iter() {
-        let current = if key == CARGO_ENV {
-            Some(
-                cargo_exe
-                    .to_str()
-                    .ok_or_else(|| {
-                        format_err!("cargo exe path {} must be valid UTF-8", cargo_exe.display())
-                    })?
-                    .to_string(),
-            )
-        } else {
-            gctx.get_env(key).ok()
-        };
-        if current == *previous {
-            continue;
-        }
-        return Ok(Either::Left(StaleItem::ChangedEnv {
-            var: key.clone(),
-            previous: previous.clone(),
-            current,
-        }));
-    }
-    Ok(Either::Right(info))
 }
 
 impl Fingerprint {
@@ -1040,8 +1011,14 @@ impl Fingerprint {
                     }
                 }
                 (
-                    LocalFingerprint::CheckDepInfo { dep_info: adep },
-                    LocalFingerprint::CheckDepInfo { dep_info: bdep },
+                    LocalFingerprint::CheckDepInfo {
+                        dep_info: adep,
+                        checksum: checksum_a,
+                    },
+                    LocalFingerprint::CheckDepInfo {
+                        dep_info: bdep,
+                        checksum: checksum_b,
+                    },
                 ) => {
                     if adep != bdep {
                         return DirtyReason::DepInfoOutputChanged {
@@ -1049,15 +1026,10 @@ impl Fingerprint {
                             new: adep.clone(),
                         };
                     }
-                }
-                (
-                    LocalFingerprint::CheckDepInfoChecksums { dep_info: adep },
-                    LocalFingerprint::CheckDepInfoChecksums { dep_info: bdep },
-                ) => {
-                    if adep != bdep {
-                        return DirtyReason::DepInfoOutputChanged {
-                            old: bdep.clone(),
-                            new: adep.clone(),
+                    if checksum_a != checksum_b {
+                        return DirtyReason::ChecksumUseChanged {
+                            old: *checksum_b,
+                            new: *checksum_a,
                         };
                     }
                 }
@@ -1516,11 +1488,10 @@ fn calculate_normal(
     } else {
         let dep_info = dep_info_loc(build_runner, unit);
         let dep_info = dep_info.strip_prefix(&target_root).unwrap().to_path_buf();
-        if build_runner.bcx.gctx.cli_unstable().checksum_freshness {
-            vec![LocalFingerprint::CheckDepInfoChecksums { dep_info }]
-        } else {
-            vec![LocalFingerprint::CheckDepInfo { dep_info }]
-        }
+        vec![LocalFingerprint::CheckDepInfo {
+            dep_info,
+            checksum: build_runner.bcx.gctx.cli_unstable().checksum_freshness,
+        }]
     };
 
     // Figure out what the outputs of our unit is, and we'll be storing them
