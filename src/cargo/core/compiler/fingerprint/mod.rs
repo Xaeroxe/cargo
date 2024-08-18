@@ -376,7 +376,6 @@ use std::time::SystemTime;
 use anyhow::{bail, format_err, Context as _};
 use cargo_util::{paths, ProcessBuilder, Sha256};
 use filetime::FileTime;
-use itertools::Either;
 use serde::de;
 use serde::ser;
 use serde::{Deserialize, Serialize};
@@ -1938,10 +1937,10 @@ pub fn parse_dep_info(
     ret.files.extend(
         info.files
             .into_iter()
-            .map(|(ty, path)| make_absolute_path(ty, pkg_root, path, target_root)),
+            .map(|(ty, path)| make_absolute_path(ty, pkg_root, target_root, path)),
     );
     for (ty, path, file_len, checksum) in info.checksum {
-        let path = make_absolute_path(ty, pkg_root, path, target_root);
+        let path = make_absolute_path(ty, pkg_root, target_root, path);
         ret.checksum
             .insert(path, (file_len, Checksum::from_str(&checksum)?));
     }
@@ -1951,8 +1950,8 @@ pub fn parse_dep_info(
 fn make_absolute_path(
     ty: DepInfoPathType,
     pkg_root: &Path,
-    path: PathBuf,
     target_root: &Path,
+    path: PathBuf,
 ) -> PathBuf {
     match ty {
         DepInfoPathType::PackageRootRelative => pkg_root.join(path),
