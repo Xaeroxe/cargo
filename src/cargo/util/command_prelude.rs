@@ -759,7 +759,6 @@ Run `{cmd}` to see possible targets."
         build_config.build_plan = self.flag("build-plan");
         build_config.unit_graph = self.flag("unit-graph");
         build_config.future_incompat_report = self.flag("future-incompat-report");
-        build_config.checksum_freshness = self.flag("checksum-freshness");
 
         if self._contains("timings") {
             for timing_output in self._values_of("timings") {
@@ -793,10 +792,6 @@ Run `{cmd}` to see possible targets."
         if build_config.unit_graph {
             gctx.cli_unstable()
                 .fail_if_stable_opt("--unit-graph", 8002)?;
-        }
-        if build_config.checksum_freshness {
-            gctx.cli_unstable()
-                .fail_if_stable_opt("--checksum-freshness", 14136)?;
         }
 
         let opts = CompileOptions {
