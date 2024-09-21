@@ -36,7 +36,6 @@ pub enum DirtyReason {
     },
     ChecksumUseChanged {
         old: bool,
-        new: bool,
     },
     DepInfoOutputChanged {
         old: PathBuf,
@@ -187,7 +186,7 @@ impl DirtyReason {
             DirtyReason::PrecalculatedComponentsChanged { .. } => {
                 s.dirty_because(unit, "the precalculated components changed")
             }
-            DirtyReason::ChecksumUseChanged { old, new: _ } => {
+            DirtyReason::ChecksumUseChanged { old } => {
                 if *old {
                     s.dirty_because(
                         unit,
@@ -236,6 +235,13 @@ impl DirtyReason {
                             format_args!("the file `{}` is missing", file.display()),
                         )
                     }
+                    StaleItem::UnableToReadFile(file) => {
+                        let file = file.strip_prefix(root).unwrap_or(&file);
+                        s.dirty_because(
+                            unit,
+                            format_args!("the file `{}` could not be read", file.display()),
+                        )
+                    }
                     StaleItem::FailedToReadMetadata(file) => {
                         let file = file.strip_prefix(root).unwrap_or(&file);
                         s.dirty_because(
@@ -265,10 +271,8 @@ impl DirtyReason {
                         s.dirty_because(
                             unit,
                             format_args!(
-                                "the file `{}` has changed (checksum didn't match, {} != {})",
+                                "the file `{}` has changed (checksum didn't match, {stored_checksum} != {new_checksum})",
                                 file.display(),
-                                stored_checksum,
-                                new_checksum,
                             ),
                         )
                     }

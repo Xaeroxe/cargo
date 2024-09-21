@@ -518,7 +518,11 @@ otherwise be untracked for change-detection.
 
 The `-Z checksum-freshness` flag will replace the use of file mtimes in cargo's
 fingerprints with a file checksum value. This is most useful on systems with a poor
-mtime implementation, or in CI/CD. The checksum algorithm can change without notice between cargo versions. Fingerprints are used by cargo to determine when a crate needs to be rebuilt.
+mtime implementation, or in CI/CD. The checksum algorithm can change without notice
+between cargo versions. Fingerprints are used by cargo to determine when a crate needs to be rebuilt.
+
+For the time being files ingested by build script will continue to use mtimes, even when `checksum-freshness`
+is enabled. This is not intended as a long term solution.
 
 ## panic-abort-tests
 * Tracking Issue: [#67650](https://github.com/rust-lang/rust/issues/67650)

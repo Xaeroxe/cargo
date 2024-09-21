@@ -199,6 +199,7 @@ shell-escape.workspace = true
 supports-hyperlinks.workspace = true
 tar.workspace = true
 tempfile.workspace = true
+thiserror.workspace = true
 time.workspace = true
 toml.workspace = true
 toml_edit.workspace = true

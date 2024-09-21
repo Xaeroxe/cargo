@@ -365,7 +365,7 @@ use std::collections::hash_map::{Entry, HashMap};
 
 use std::env;
 use std::fmt::{self, Display};
-use std::fs::File;
+use std::fs::{self, File};
 use std::hash::{self, Hash, Hasher};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -763,6 +763,7 @@ enum LocalFingerprint {
 #[derive(Clone, Debug)]
 pub enum StaleItem {
     MissingFile(PathBuf),
+    UnableToReadFile(PathBuf),
     FailedToReadMetadata(PathBuf),
     FileSizeChanged {
         path: PathBuf,
@@ -831,9 +832,8 @@ impl LocalFingerprint {
             // rustc.
             LocalFingerprint::CheckDepInfo { dep_info, checksum } => {
                 let dep_info = target_root.join(dep_info);
-                let cargo_exe = cargo_exe;
                 let Some(info) = parse_dep_info(pkg_root, target_root, &dep_info)? else {
-                    return Ok(Some(StaleItem::MissingFile(dep_info.clone())));
+                    return Ok(Some(StaleItem::MissingFile(dep_info)));
                 };
                 for (key, previous) in info.env.iter() {
                     let current = if key == CARGO_ENV {
@@ -860,24 +860,25 @@ impl LocalFingerprint {
                         current,
                     }));
                 }
-                macro_rules! find_stale_file {
-                    ($iter:expr) => {
-                        Ok(find_stale_file(
-                            mtime_cache,
-                            checksum_cache,
-                            &dep_info,
-                            $iter,
-                            *checksum,
-                        ))
-                    };
-                }
                 if *checksum {
-                    find_stale_file!(info
-                        .files
-                        .iter()
-                        .map(|file| (file.clone(), info.checksum.get(file).cloned())))
+                    Ok(find_stale_file(
+                        mtime_cache,
+                        checksum_cache,
+                        &dep_info,
+                        info.files.iter().map(|file| {
+                            let checksum = info.checksum.get(file.as_path()).cloned();
+                            (file, checksum)
+                        }),
+                        *checksum,
+                    ))
                 } else {
-                    find_stale_file!(info.files.into_iter().map(|p| (p, None)))
+                    Ok(find_stale_file(
+                        mtime_cache,
+                        checksum_cache,
+                        &dep_info,
+                        info.files.into_iter().map(|p| (p, None)),
+                        *checksum,
+                    ))
                 }
             }
 
@@ -1026,10 +1027,7 @@ impl Fingerprint {
                         };
                     }
                     if checksum_a != checksum_b {
-                        return DirtyReason::ChecksumUseChanged {
-                            old: *checksum_b,
-                            new: *checksum_a,
-                        };
+                        return DirtyReason::ChecksumUseChanged { old: *checksum_b };
                     }
                 }
                 (
@@ -1355,6 +1353,9 @@ impl StaleItem {
         match self {
             StaleItem::MissingFile(path) => {
                 info!("stale: missing {:?}", path);
+            }
+            StaleItem::UnableToReadFile(path) => {
+                info!("stale: unable to read {:?}", path);
             }
             StaleItem::FailedToReadMetadata(path) => {
                 info!("stale: couldn't read metadata {:?}", path);
@@ -2017,11 +2018,11 @@ where
             let path_checksum = match checksum_cache.entry(path_buf) {
                 Entry::Occupied(o) => *o.get(),
                 Entry::Vacant(v) => {
+                    let Ok(current_file_len) = fs::metadata(&path).map(|m| m.len()) else {
+                        return Some(StaleItem::FailedToReadMetadata(path.to_path_buf()));
+                    };
                     let Ok(file) = File::open(path) else {
                         return Some(StaleItem::MissingFile(path.to_path_buf()));
-                    };
-                    let Ok(current_file_len) = file.metadata().map(|m| m.len()) else {
-                        return Some(StaleItem::FailedToReadMetadata(path.to_path_buf()));
                     };
                     if current_file_len != file_len {
                         return Some(StaleItem::FileSizeChanged {
@@ -2031,7 +2032,7 @@ where
                         });
                     }
                     let Ok(checksum) = Checksum::compute(prior_checksum.algo, file) else {
-                        return Some(StaleItem::MissingFile(path.to_path_buf()));
+                        return Some(StaleItem::UnableToReadFile(path.to_path_buf()));
                     };
                     *v.insert(checksum)
                 }
@@ -2620,35 +2621,15 @@ impl Display for Checksum {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum InvalidChecksum {
+    #[error("algorithm portion incorrect, {0}")]
     InvalidChecksumAlgo(InvalidChecksumAlgo),
+    #[error("expected {} hexadecimal digits in checksum portion", .0.hash_len() * 2)]
     InvalidChecksum(ChecksumAlgo),
+    #[error("expected a string with format \"algorithm=hex_checksum\"")]
     InvalidFormat,
 }
-
-impl Display for InvalidChecksum {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            InvalidChecksum::InvalidChecksumAlgo(e) => {
-                write!(f, "algorithm portion incorrect, {e}")
-            }
-            InvalidChecksum::InvalidChecksum(algo) => {
-                let expected_len = algo.hash_len() * 2;
-                write!(
-                    f,
-                    "expected {expected_len} hexadecimal digits in checksum portion"
-                )
-            }
-            InvalidChecksum::InvalidFormat => write!(
-                f,
-                "expected a string with format \"algorithm=hex_checksum\""
-            ),
-        }
-    }
-}
-
-impl std::error::Error for InvalidChecksum {}
 
 impl From<InvalidChecksumAlgo> for InvalidChecksum {
     fn from(value: InvalidChecksumAlgo) -> Self {
