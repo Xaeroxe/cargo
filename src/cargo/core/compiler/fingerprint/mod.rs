@@ -865,10 +865,7 @@ impl LocalFingerprint {
                         mtime_cache,
                         checksum_cache,
                         &dep_info,
-                        info.files.iter().map(|file| {
-                            let checksum = info.checksum.get(file.as_path()).cloned();
-                            (file, checksum)
-                        }),
+                        info.files.iter().map(|(file, checksum)| (file, *checksum)),
                         *checksum,
                     ))
                 } else {
@@ -876,7 +873,7 @@ impl LocalFingerprint {
                         mtime_cache,
                         checksum_cache,
                         &dep_info,
-                        info.files.into_iter().map(|p| (p, None)),
+                        info.files.into_iter().map(|(p, _checksum)| (p, None)),
                         *checksum,
                     ))
                 }
@@ -1935,16 +1932,15 @@ pub fn parse_dep_info(
     };
     let mut ret = RustcDepInfo::default();
     ret.env = info.env;
-    ret.files.extend(
-        info.files
-            .into_iter()
-            .map(|(ty, path)| make_absolute_path(ty, pkg_root, target_root, path)),
-    );
-    for (ty, path, file_len, checksum) in info.checksum {
-        let path = make_absolute_path(ty, pkg_root, target_root, path);
-        ret.checksum
-            .insert(path, (file_len, Checksum::from_str(&checksum)?));
-    }
+    ret.files
+        .extend(info.files.into_iter().map(|(ty, path, checksum_info)| {
+            (
+                make_absolute_path(ty, pkg_root, target_root, path),
+                checksum_info.and_then(|(file_len, checksum)| {
+                    Checksum::from_str(&checksum).ok().map(|c| (file_len, c))
+                }),
+            )
+        }));
     Ok(Some(ret))
 }
 
@@ -2201,21 +2197,14 @@ pub fn translate_dep_info(
         Some((ty, path.to_owned()))
     };
 
-    for file in depinfo.files {
-        let Some(serializable_path) = serialize_path(file) else {
+    for (file, checksum_info) in depinfo.files {
+        let Some((path_type, path)) = serialize_path(file) else {
             continue;
         };
-        on_disk_info.files.push(serializable_path);
-    }
-    for (file, (file_len, checksum)) in depinfo.checksum {
-        let Some(serializable_path) = serialize_path(file) else {
-            continue;
-        };
-        on_disk_info.checksum.push((
-            serializable_path.0,
-            serializable_path.1,
-            file_len,
-            checksum.to_string(),
+        on_disk_info.files.push((
+            path_type,
+            path,
+            checksum_info.map(|(len, checksum)| (len, checksum.to_string())),
         ));
     }
     paths::write(cargo_dep_info, on_disk_info.serialize()?)?;
@@ -2226,7 +2215,7 @@ pub fn translate_dep_info(
 #[derive(Default)]
 pub struct RustcDepInfo {
     /// The list of files that the main target in the dep-info file depends on.
-    pub files: Vec<PathBuf>,
+    pub files: Vec<(PathBuf, Option<(u64, Checksum)>)>,
     /// The list of environment variables we found that the rustc compilation
     /// depends on.
     ///
@@ -2235,10 +2224,6 @@ pub struct RustcDepInfo {
     /// means that the env var wasn't actually set and the compilation depends
     /// on it not being set.
     pub env: Vec<(String, Option<String>)>,
-
-    /// If provided by rustc, a mapping that ties a file to the checksum and file size
-    /// at the time rustc ingested it.
-    pub checksum: HashMap<PathBuf, (u64, Checksum)>,
 }
 
 /// Same as [`RustcDepInfo`] except avoids absolute paths as much as possible to
@@ -2248,9 +2233,8 @@ pub struct RustcDepInfo {
 /// Cargo will read it for crates on all future compilations.
 #[derive(Default)]
 struct EncodedDepInfo {
-    files: Vec<(DepInfoPathType, PathBuf)>,
+    files: Vec<(DepInfoPathType, PathBuf, Option<(u64, String)>)>,
     env: Vec<(String, Option<String>)>,
-    checksum: Vec<(DepInfoPathType, PathBuf, u64, String)>,
 }
 
 impl EncodedDepInfo {
@@ -2264,8 +2248,19 @@ impl EncodedDepInfo {
                 1 => DepInfoPathType::TargetRootRelative,
                 _ => return None,
             };
-            let bytes = read_bytes(bytes)?;
-            files.push((ty, paths::bytes2path(bytes).ok()?));
+            let path_bytes = read_bytes(bytes)?;
+            let path = paths::bytes2path(path_bytes).ok()?;
+            let has_checksum = read_bool(bytes)?;
+            let checksum_info = has_checksum
+                .then(|| {
+                    let file_len = read_u64(bytes);
+                    let checksum_string = read_bytes(bytes)
+                        .map(Vec::from)
+                        .and_then(|v| String::from_utf8(v).ok());
+                    file_len.zip(checksum_string)
+                })
+                .flatten();
+            files.push((ty, path, checksum_info));
         }
 
         let nenv = read_usize(bytes)?;
@@ -2279,29 +2274,7 @@ impl EncodedDepInfo {
             };
             env.push((key, val));
         }
-        let nchecksum = read_usize(bytes)?;
-        let mut checksum = Vec::with_capacity(nchecksum);
-        for _ in 0..nchecksum {
-            let ty = match read_u8(bytes)? {
-                0 => DepInfoPathType::PackageRootRelative,
-                1 => DepInfoPathType::TargetRootRelative,
-                _ => return None,
-            };
-            let path_bytes = read_bytes(bytes)?;
-            let file_len = read_u64(bytes)?;
-            let checksum_bytes = read_bytes(bytes)?;
-            checksum.push((
-                ty,
-                paths::bytes2path(path_bytes).ok()?,
-                file_len,
-                from_utf8(checksum_bytes).ok()?.to_string(),
-            ));
-        }
-        return Some(EncodedDepInfo {
-            files,
-            env,
-            checksum,
-        });
+        return Some(EncodedDepInfo { files, env });
 
         fn read_usize(bytes: &mut &[u8]) -> Option<usize> {
             let ret = bytes.get(..4)?;
@@ -2313,6 +2286,12 @@ impl EncodedDepInfo {
             let ret = bytes.get(..8)?;
             *bytes = &bytes[8..];
             Some(u64::from_le_bytes(ret.try_into().unwrap()))
+        }
+
+        fn read_bool(bytes: &mut &[u8]) -> Option<bool> {
+            let ret = bytes.get(0).map(|b| *b != 0)?;
+            *bytes = &bytes[1..];
+            Some(ret)
         }
 
         fn read_u8(bytes: &mut &[u8]) -> Option<u8> {
@@ -2333,12 +2312,17 @@ impl EncodedDepInfo {
         let mut ret = Vec::new();
         let dst = &mut ret;
         write_usize(dst, self.files.len());
-        for (ty, file) in self.files.iter() {
+        for (ty, file, checksum_info) in self.files.iter() {
             match ty {
                 DepInfoPathType::PackageRootRelative => dst.push(0),
                 DepInfoPathType::TargetRootRelative => dst.push(1),
             }
             write_bytes(dst, paths::path2bytes(file)?);
+            write_bool(dst, checksum_info.is_some());
+            if let Some((len, checksum)) = checksum_info {
+                write_u64(dst, *len);
+                write_bytes(dst, checksum);
+            }
         }
 
         write_usize(dst, self.env.len());
@@ -2351,17 +2335,6 @@ impl EncodedDepInfo {
                     write_bytes(dst, val);
                 }
             }
-        }
-
-        write_usize(dst, self.checksum.len());
-        for (ty, file, file_len, checksum) in self.checksum.iter() {
-            match ty {
-                DepInfoPathType::PackageRootRelative => dst.push(0),
-                DepInfoPathType::TargetRootRelative => dst.push(1),
-            }
-            write_bytes(dst, paths::path2bytes(file)?);
-            write_u64(dst, *file_len);
-            write_bytes(dst, checksum);
         }
         return Ok(ret);
 
@@ -2377,6 +2350,10 @@ impl EncodedDepInfo {
 
         fn write_u64(dst: &mut Vec<u8>, val: u64) {
             dst.extend(&u64::to_le_bytes(val));
+        }
+
+        fn write_bool(dst: &mut Vec<u8>, val: bool) {
+            dst.push(u8::from(val));
         }
     }
 }
@@ -2398,39 +2375,42 @@ pub fn parse_rustc_dep_info(rustc_dep_info: &Path) -> CargoResult<RustcDepInfo> 
                 None => None,
             };
             ret.env.push((unescape_env(env_var)?, env_val));
-        } else if let Some(rest) = line.strip_prefix("# checksum:") {
-            let mut parts = rest.splitn(3, ' ');
-            let Some(checksum) = parts.next().map(Checksum::from_str).transpose()? else {
-                continue;
-            };
-            let Some(Ok(file_len)) = parts
-                .next()
-                .and_then(|s| s.strip_prefix("file_len:").map(|s| s.parse::<u64>()))
-            else {
-                continue;
-            };
-            let Some(path) = parts.next().map(PathBuf::from) else {
-                continue;
-            };
-
-            ret.checksum.insert(path, (file_len, checksum));
         } else if let Some(pos) = line.find(": ") {
             if found_deps {
                 continue;
             }
+            let mut parsing_checksum_index = None;
+            let mut last_seen_checksum = None;
             found_deps = true;
             let mut deps = line[pos + 2..].split_whitespace();
 
             while let Some(s) = deps.next() {
-                let mut file = s.to_string();
-                while file.ends_with('\\') {
-                    file.pop();
-                    file.push(' ');
-                    file.push_str(deps.next().ok_or_else(|| {
+                let mut word = s.to_string();
+                if word == "#" {
+                    parsing_checksum_index = Some(0);
+                    continue;
+                }
+                while word.ends_with('\\') {
+                    word.pop();
+                    word.push(' ');
+                    word.push_str(deps.next().ok_or_else(|| {
                         internal("malformed dep-info format, trailing \\".to_string())
                     })?);
                 }
-                ret.files.push(file.into());
+                if let Some(parsing_checksum_index) = parsing_checksum_index.as_mut() {
+                    // By now files list is built, checksum data is provided in the same order as
+                    // the file list
+                    if let Some(checksum) = word.strip_prefix("checksum:") {
+                        last_seen_checksum = Some(Checksum::from_str(checksum)?);
+                    } else if let Some(file_len) = word.strip_prefix("file_len:") {
+                        let file_len = file_len.parse::<u64>()?;
+                        let file_entry = &mut ret.files[*parsing_checksum_index];
+                        file_entry.1 = last_seen_checksum.take().map(|c| (file_len, c));
+                        *parsing_checksum_index += 1;
+                    }
+                } else {
+                    ret.files.push((word.into(), None));
+                }
             }
         }
     }

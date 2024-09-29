@@ -159,7 +159,7 @@ fn rebuild_sub_package_then_while_package() {
         .masquerade_as_nightly_cargo(&["checksum-freshness"])
         .with_stderr(
             "\
-[LOCKING] 3 packages to latest compatible versions
+[LOCKING] 2 packages to latest compatible versions
 [CHECKING] b [..]
 [CHECKING] a [..]
 [CHECKING] foo [..]
@@ -415,7 +415,7 @@ fn changing_bin_paths_common_target_features_caches_targets() {
         .with_stdout("ftest off")
         .with_stderr(
             "\
-[LOCKING] 2 packages to latest compatible versions
+[LOCKING] 1 package to latest compatible version
 [..]Compiling dep_crate v0.0.1 ([..])
 [..]Compiling a v0.0.1 ([..])
 [FINISHED] `dev` profile [unoptimized + debuginfo] target(s) in [..]
@@ -447,7 +447,7 @@ fn changing_bin_paths_common_target_features_caches_targets() {
         .with_stdout("ftest on")
         .with_stderr(
             "\
-[LOCKING] 2 packages to latest compatible versions
+[LOCKING] 1 package to latest compatible version
 [..]Compiling dep_crate v0.0.1 ([..])
 [..]Compiling b v0.0.1 ([..])
 [FINISHED] `dev` profile [unoptimized + debuginfo] target(s) in [..]
@@ -824,7 +824,7 @@ fn same_build_dir_cached_packages() {
         .cwd("a1")
         .with_stderr(&format!(
             "\
-[LOCKING] 4 packages to latest compatible versions
+[LOCKING] 3 packages to latest compatible versions
 [CHECKING] d v0.0.1 ({dir}/d)
 [CHECKING] c v0.0.1 ({dir}/c)
 [CHECKING] b v0.0.1 ({dir}/b)
@@ -839,7 +839,7 @@ fn same_build_dir_cached_packages() {
         .cwd("a2")
         .with_stderr(
             "\
-[LOCKING] 4 packages to latest compatible versions
+[LOCKING] 3 packages to latest compatible versions
 [CHECKING] a2 v0.0.1 ([CWD])
 [FINISHED] `dev` profile [unoptimized + debuginfo] target(s) in [..]
 ",
@@ -1394,7 +1394,7 @@ fn reuse_panic_build_dep_test() {
         .masquerade_as_nightly_cargo(&["checksum-freshness"])
         .with_stderr(
             "\
-[LOCKING] 2 packages to latest compatible versions
+[LOCKING] 1 package to latest compatible version
 [COMPILING] bar [..]
 [RUNNING] `rustc --crate-name bar [..]
 [COMPILING] foo [..]
@@ -1456,7 +1456,7 @@ fn reuse_panic_pm() {
 
         .with_stderr_unordered(
             "\
-[LOCKING] 3 packages to latest compatible versions
+[LOCKING] 2 packages to latest compatible versions
 [COMPILING] bar [..]
 [RUNNING] `rustc --crate-name bar --edition=2015 bar/src/lib.rs [..]--crate-type lib --emit=[..]link[..]
 [RUNNING] `rustc --crate-name bar --edition=2015 bar/src/lib.rs [..]--crate-type lib --emit=[..]link -C panic=abort[..]-C debuginfo=2 [..]
@@ -1625,7 +1625,6 @@ fn rebuild_on_mid_build_file_modification() {
         .masquerade_as_nightly_cargo(&["checksum-freshness"])
         .with_stderr(
             "\
-[LOCKING] 2 packages to latest compatible versions
 [COMPILING] proc_macro_dep v0.1.0 ([..]/proc_macro_dep)
 [CHECKING] root v0.1.0 ([..]/root)
 [FINISHED] `dev` profile [unoptimized + debuginfo] target(s) in [..]
