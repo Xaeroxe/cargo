@@ -2289,9 +2289,7 @@ impl EncodedDepInfo {
         }
 
         fn read_bool(bytes: &mut &[u8]) -> Option<bool> {
-            let ret = bytes.get(0).map(|b| *b != 0)?;
-            *bytes = &bytes[1..];
-            Some(ret)
+            read_u8(bytes).map(|b| b != 0)
         }
 
         fn read_u8(bytes: &mut &[u8]) -> Option<u8> {
