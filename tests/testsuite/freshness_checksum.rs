@@ -1584,7 +1584,8 @@ fn bust_patched_dep() {
 [RUNNING] `rustc --crate-name foo [..]
 [FINISHED] `dev` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
 
-"#]]).run();
+"#]])
+        .run();
 
     p.cargo("build -Zchecksum-freshness -v")
         .masquerade_as_nightly_cargo(&["checksum-freshness"])
@@ -1703,7 +1704,8 @@ fn rebuild_on_mid_build_file_modification() {
 [RUNNING] `rustc --crate-name root [..]
 [FINISHED] `dev` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
 
-"#]]).run();
+"#]])
+        .run();
 
     t.join().ok().unwrap();
 }
