@@ -2215,7 +2215,7 @@ pub fn translate_dep_info(
 #[derive(Default)]
 pub struct RustcDepInfo {
     /// The list of files that the main target in the dep-info file depends on.
-    pub files: Vec<(PathBuf, Option<(u64, Checksum)>)>,
+    pub files: HashMap<PathBuf, Option<(u64, Checksum)>>,
     /// The list of environment variables we found that the rustc compilation
     /// depends on.
     ///
@@ -2379,38 +2379,37 @@ pub fn parse_rustc_dep_info(rustc_dep_info: &Path) -> CargoResult<RustcDepInfo> 
             if found_deps {
                 continue;
             }
-            let mut parsing_checksum_index = None;
-            let mut last_seen_checksum = None;
             found_deps = true;
             let mut deps = line[pos + 2..].split_whitespace();
 
             while let Some(s) = deps.next() {
-                let mut word = s.to_string();
-                if word == "#" {
-                    parsing_checksum_index = Some(0);
-                    continue;
-                }
-                while word.ends_with('\\') {
-                    word.pop();
-                    word.push(' ');
-                    word.push_str(deps.next().ok_or_else(|| {
+                let mut file = s.to_string();
+                while file.ends_with('\\') {
+                    file.pop();
+                    file.push(' ');
+                    file.push_str(deps.next().ok_or_else(|| {
                         internal("malformed dep-info format, trailing \\".to_string())
                     })?);
                 }
-                if let Some(parsing_checksum_index) = parsing_checksum_index.as_mut() {
-                    // By now files list is built, checksum data is provided in the same order as
-                    // the file list
-                    if let Some(checksum) = word.strip_prefix("checksum:") {
-                        last_seen_checksum = Some(Checksum::from_str(checksum)?);
-                    } else if let Some(file_len) = word.strip_prefix("file_len:") {
-                        let file_len = file_len.parse::<u64>()?;
-                        let file_entry = &mut ret.files[*parsing_checksum_index];
-                        file_entry.1 = last_seen_checksum.take().map(|c| (file_len, c));
-                        *parsing_checksum_index += 1;
-                    }
-                } else {
-                    ret.files.push((word.into(), None));
-                }
+                ret.files.insert(file.into(), None);
+            }
+        } else if let Some(rest) = line.strip_prefix("# checksum:") {
+            let mut parts = rest.splitn(3, ' ');
+            let Some(checksum) = parts.next().map(Checksum::from_str).transpose()? else {
+                continue;
+            };
+            let Some(Ok(file_len)) = parts
+                .next()
+                .and_then(|s| s.strip_prefix("file_len:").map(|s| s.parse::<u64>()))
+            else {
+                continue;
+            };
+            let Some(path) = parts.next().map(PathBuf::from) else {
+                continue;
+            };
+
+            if let Some(entry) = ret.files.get_mut(&path) {
+                *entry = Some((file_len, checksum));
             }
         }
     }
