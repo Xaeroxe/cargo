@@ -61,7 +61,7 @@ fn add_deps_for_unit(
             build_runner.files().host_root(),
             &dep_info_loc,
         )? {
-            for (path, _checksum) in paths.files {
+            for path in paths.files.into_keys() {
                 deps.insert(path);
             }
         } else {

@@ -873,7 +873,7 @@ impl LocalFingerprint {
                         mtime_cache,
                         checksum_cache,
                         &dep_info,
-                        info.files.into_iter().map(|(p, _checksum)| (p, None)),
+                        info.files.into_keys().map(|p| (p, None)),
                         *checksum,
                     ))
                 }
