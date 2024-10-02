@@ -2389,7 +2389,7 @@ pub fn parse_rustc_dep_info(rustc_dep_info: &Path) -> CargoResult<RustcDepInfo> 
                         internal("malformed dep-info format, trailing \\".to_string())
                     })?);
                 }
-                ret.files.insert(file.into(), None);
+                ret.files.entry(file.into()).or_insert(None);
             }
         } else if let Some(rest) = line.strip_prefix("# checksum:") {
             let mut parts = rest.splitn(3, ' ');
@@ -2406,9 +2406,7 @@ pub fn parse_rustc_dep_info(rustc_dep_info: &Path) -> CargoResult<RustcDepInfo> 
                 continue;
             };
 
-            if let Some(entry) = ret.files.get_mut(&path) {
-                *entry = Some((file_len, checksum));
-            }
+            ret.files.insert(path, Some((file_len, checksum)));
         }
     }
     return Ok(ret);
