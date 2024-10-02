@@ -2389,7 +2389,7 @@ pub fn parse_rustc_dep_info(rustc_dep_info: &Path) -> CargoResult<RustcDepInfo> 
                         internal("malformed dep-info format, trailing \\".to_string())
                     })?);
                 }
-                ret.files.entry(file.into()).or_insert(None);
+                ret.files.entry(file.into()).or_default();
             }
         } else if let Some(rest) = line.strip_prefix("# checksum:") {
             let mut parts = rest.splitn(3, ' ');
