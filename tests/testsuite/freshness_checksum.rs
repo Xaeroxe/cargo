@@ -14,6 +14,19 @@ use cargo_test_support::{
 
 use super::death;
 
+#[cargo_test]
+fn non_nightly_fails() {
+    let p = project().file("src/main.rs", "fn main() {}").build();
+    let mut cmd = p.cargo("build").arg("-Zchecksum-freshness").build_command();
+    let output = cmd.output().unwrap();
+    assert!(
+        String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("error: the `-Z` flag is only accepted on the nightly channel of Cargo, but this is the `stable` channel")
+    );
+    assert!(!output.status.success());
+}
+
 #[cargo_test(nightly, reason = "requires -Zchecksum-hash-algorithm")]
 fn checksum_actually_uses_checksum() {
     let p = project()
